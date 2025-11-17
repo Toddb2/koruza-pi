@@ -8,3 +8,10 @@ gevent-websocket==0.9.5
 Flask==0.10.1
 Flask-Webpack==0.0.7
 imgurpython==1.1.6
+
+cryptography==2.0.3
+Werkzeug==0.7
+Jinja2==2.4
+itsdangerous==0.21
+idna==2.1
+greenlet==0.4.7

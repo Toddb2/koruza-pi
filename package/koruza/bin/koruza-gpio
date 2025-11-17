@@ -5,44 +5,31 @@ import json
 import nnpy
 import select
 
-# LEDs.
-PIN_LED_STATUS = 19
-PIN_LED_LINK = 13
-PIN_LED_MOTORS = 12
-# 3.3V power rail for laser.
-PIN_SW_LASER_POWER = 22
-# 9V output for SFP, initialize HIGH.
-PIN_SW_SFP_OUTPUT = 27
-# 24V unregulated channel (for heaters and stuff).
-PIN_SW_UNREGULATED = 17
-# Drain output for 3.3V channel (for laser or similar).
-PIN_SW_DRAIN = 4
-# Input for reed switch.
-PIN_IN_SWITCH = 16
-# Serial communication pin
-PIN_TX0 = 14
-# Serial communication pin
-PIN_RX0 = 15
+# Stepper motor pins 
+PIN_MOTOR_1 = 14  # IN1
+PIN_MOTOR_2 = 15  # IN2
+PIN_MOTOR_3 = 17  # IN3
+PIN_MOTOR_4 = 18  # IN4
 
-# Enable pins.
+# Stepper motor sequence
+STEPPER_SEQUENCE = [
+    [1, 0, 0, 0],
+    [1, 1, 0, 0],
+    [0, 1, 0, 0],
+    [0, 1, 1, 0],
+    [0, 0, 1, 0],
+    [0, 0, 1, 1],
+    [0, 0, 0, 1],
+    [1, 0, 0, 1],
+]
+
+# GPIO setup.
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(PIN_LED_STATUS, GPIO.OUT)
-GPIO.setup(PIN_LED_LINK, GPIO.OUT)
-GPIO.setup(PIN_LED_MOTORS, GPIO.OUT)
-GPIO.setup(PIN_SW_LASER_POWER, GPIO.OUT)
-GPIO.setup(PIN_SW_SFP_OUTPUT, GPIO.OUT)
-GPIO.setup(PIN_SW_UNREGULATED, GPIO.OUT)
-GPIO.setup(PIN_SW_DRAIN, GPIO.OUT)
-GPIO.setup(PIN_IN_SWITCH, GPIO.IN)
-# Set up initial values.
-GPIO.output(PIN_LED_STATUS, GPIO.HIGH)
-GPIO.output(PIN_LED_LINK, GPIO.HIGH)
-GPIO.output(PIN_LED_MOTORS, GPIO.HIGH)
-GPIO.output(PIN_SW_LASER_POWER, GPIO.HIGH)
-GPIO.output(PIN_SW_SFP_OUTPUT, GPIO.HIGH)
-GPIO.output(PIN_SW_UNREGULATED, GPIO.LOW)
-GPIO.output(PIN_SW_DRAIN, GPIO.LOW)
+GPIO.setup(PIN_MOTOR_1, GPIO.OUT)
+GPIO.setup(PIN_MOTOR_2, GPIO.OUT)
+GPIO.setup(PIN_MOTOR_3, GPIO.OUT)
+GPIO.setup(PIN_MOTOR_4, GPIO.OUT)
 
 # Establish IPC connection.
 ipc = nnpy.Socket(nnpy.AF_SP, nnpy.SUB)
@@ -52,20 +39,18 @@ ipc.setsockopt(nnpy.SUB, nnpy.SUB_SUBSCRIBE, '')
 poll = select.poll()
 poll.register(ipc.getsockopt(nnpy.SOL_SOCKET, nnpy.RCVFD), select.POLLIN)
 
-# Initialize last known state.
-status_x = 0
-status_y = 0
-status_f = 0
-rx_power = 0
-led_status = GPIO.HIGH
-
-last_led_toggle = time.time()
-last_watchdog = time.time()
-
-last_sfp_watchdog = time.time()
-last_sfp_update = None
+# Initialize motor state.
+current_step = 0
 last_motors_update = None
 
+# Function to set motor pins based on the step sequence.
+def set_motor_pins(step):
+    GPIO.output(PIN_MOTOR_1, STEPPER_SEQUENCE[step][0])
+    GPIO.output(PIN_MOTOR_2, STEPPER_SEQUENCE[step][1])
+    GPIO.output(PIN_MOTOR_3, STEPPER_SEQUENCE[step][2])
+    GPIO.output(PIN_MOTOR_4, STEPPER_SEQUENCE[step][3])
+
+# Main loop.
 while True:
     now = time.time()
 
@@ -75,53 +60,20 @@ while True:
         topic, payload = ipc.recv().split('@', 1)
         data = json.loads(payload)
         if data['type'] == 'motors':
-            status_x = data['motor']['status_x']
-            status_y = data['motor']['status_y']
-            status_f = data['motor']['status_f']
+            # Example: Increment or decrement motor steps based on received commands.
+            command = data['motor'].get('command')
+            if command == 'step_forward':
+                current_step = (current_step + 1) % len(STEPPER_SEQUENCE)
+                set_motor_pins(current_step)
+            elif command == 'step_backward':
+                current_step = (current_step - 1) % len(STEPPER_SEQUENCE)
+                set_motor_pins(current_step)
             last_motors_update = now
-        elif data['type'] == 'sfp':
-            # TODO: Properly support multiple SFP modules.
-            rx_power = data['sfp'].values()[0]['rx_power_mw']
-            last_sfp_update = now
-        elif data['type'] == 'watchdog':
-            last_watchdog = now
 
-    # Cycle power in case there has been no SFP/motor updates.
-    def is_timeout(last_update, timeout=10):
-        try:
-            if now - last_update > timeout:
-                return True
-        except TypeError:
-            pass
-
-        return False
-
-    if (is_timeout(last_sfp_update) or is_timeout(last_motors_update)) and is_timeout(last_sfp_watchdog, 60):
-        print "WARNING: SFP/motor watchdog triggered, cycling PIN_SW_SFP_OUTPUT."
-        GPIO.output(PIN_SW_SFP_OUTPUT, GPIO.LOW)
-        # Reset on UART pin to fix a bug of parasite power
-        GPIO.setup(PIN_TX0, GPIO.OUT)
-        GPIO.output(PIN_TX0, GPIO.LOW)
-        time.sleep(5)
-        GPIO.output(PIN_SW_SFP_OUTPUT, GPIO.HIGH)
-        last_sfp_watchdog = now
-
-    # Update GPIOs.
-    if status_x == 1 or status_y == 1 or status_f == 1:
-        GPIO.output(PIN_LED_MOTORS, GPIO.HIGH)
-    else:
-        GPIO.output(PIN_LED_MOTORS, GPIO.LOW)
-
-    if rx_power > 0.0010:
-        GPIO.output(PIN_LED_LINK, GPIO.HIGH)
-    else:
-        GPIO.output(PIN_LED_LINK, GPIO.LOW)
-
-    # Toggle status LED.
-    if now - last_watchdog > 70:
-        led_status = GPIO.HIGH
-        GPIO.output(PIN_LED_STATUS, GPIO.HIGH)
-    elif now - last_led_toggle > 0.5:
-        led_status = GPIO.HIGH if led_status == GPIO.LOW else GPIO.LOW
-        GPIO.output(PIN_LED_STATUS, led_status)
-        last_led_toggle = now
+    # Reset motor pins if no updates for a while (watchdog).
+    if last_motors_update and now - last_motors_update > 10:
+        GPIO.output(PIN_MOTOR_1, 0)
+        GPIO.output(PIN_MOTOR_2, 0)
+        GPIO.output(PIN_MOTOR_3, 0)
+        GPIO.output(PIN_MOTOR_4, 0)
+        last_motors_update = None

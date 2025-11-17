@@ -6,6 +6,9 @@ apt-get install --yes --force-yes \
   runit i2c-tools python-pip libffi-dev libffi5 python-dev python-smbus \
   libssl-dev watchdog openvpn
 
+apt-get remove -y python-cffi python-pyasn1
+pip install cffi==1.7
+
 # Ensure we have the latest pip as older versions may conflict with newer 'requests' package.
 easy_install -U pip
 
