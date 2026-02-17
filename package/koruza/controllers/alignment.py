@@ -34,19 +34,19 @@ class Alignment(koruza.Application):
     l_points = 5  # Initial number of points in line
     angle = 0  # Angle of lines
 
-    # READINGS
-    sfp_reading = 0 # Combined sfp power from both units based on distance and scaling coefficients
-    sfp_reading_self = 0 # Sfp power reading just for the unit
-    sfp_reading_remote = 0 #Sfp power reading for remote unit
-    sfp_avg = 0 # Average power for monitoring in idle state
+    # READINGS (adapted for network metrics instead of optical power)
+    link_quality = 0 # Combined link quality from both units (100 - packet_loss)
+    link_quality_self = 0 # Link quality just for this unit (0-100%)
+    link_quality_remote = 0 # Link quality for remote unit (0-100%)
+    link_quality_avg = 0 # Average link quality for monitoring in idle state
 
-    k1 = 0.5 # Scalin coefficient local (recalculated based on distance)
+    k1 = 0.5 # Scaling coefficient local (recalculated based on distance)
     k2 = 0.5 # Scaling coefficient remote (recalculated, based on distance)
 
-    min_threshold = -5  # Threshold for minimal signal recived to go from spiral scan to line scan
-    max_threshold = 25  # Stopping condition combined measurement
-    max_threshold_self = 25 # Stopping condition self unit measuremnent
-    max_threshold_remote = 25 # Stopping condition remote unit measuremnent
+    min_threshold = 50  # Threshold for minimal link quality (50% = half packets getting through)
+    max_threshold = 95  # Stopping condition combined measurement (95% = good alignment)
+    max_threshold_self = 95 # Stopping condition self unit measurement
+    max_threshold_remote = 95 # Stopping condition remote unit measurement
 
     # Best position - combined
     best_x = 0
@@ -111,8 +111,9 @@ class Alignment(koruza.Application):
                 self.k2 = 1 - self.k1
 
             # Get variables from the command that was sent on the bus.
-            self.min_threshold = command.get('min_threshold', -5)
-            self.max_threshold = command.get('max_threshold', 25)
+            # Network metric thresholds: 0-100% (link quality = 100 - packet_loss)
+            self.min_threshold = command.get('min_threshold', 50)  # 50% link quality minimum
+            self.max_threshold = command.get('max_threshold', 95)  # 95% link quality target
             self.max_threshold_self = self.max_threshold
             self.max_threshold_remote = self.max_threshold
 
@@ -162,11 +163,15 @@ class Alignment(koruza.Application):
     def on_idle(self, bus, state, remote_state):
         if self.state == 'setup':
             print 'Got to setup state.'
-            if not state.get('sfp') or not state.get('motors'):
-                # Do nothing until we have known last state from SFP and motor drivers.
+            if not state.get('netmeasure') or not state.get('motors'):
+                # Do nothing until we have known last state from network measurements and motor drivers.
                 return
-            # Get last known state for the first SFP module.
-            sfp = state['sfp']['sfp'].values()[0]
+            # Get last known network measurement state.
+            netmeasure = state['netmeasure']
+            packet_loss = netmeasure.get('packet_loss', 100.0)  # 0-100%
+            # Convert packet loss to link quality (inverse)
+            link_quality = 100.0 - packet_loss
+
             # Get last known motor driver state.
             motor = state['motors']['motor']
 
@@ -176,21 +181,27 @@ class Alignment(koruza.Application):
             # Set best position as current
             self.best_x = motor['current_x']
             self.best_y = motor['current_y']
-            self.best_rx = sfp['rx_power_db']
-            self.sfp_reading = sfp['rx_power_db']
-            self.sfp_reading_self = sfp['rx_power_db']
+            self.best_rx = link_quality
+            self.link_quality = link_quality
+            self.link_quality_self = link_quality
             self.con_timeout = time.time() # Start time for connection timeout
             self.state = 'go'
 
         elif self.state == 'go':
-            if not state.get('sfp') or not state.get('motors') or not remote_state.get('motors') or not remote_state.get('sfp'):
-                # Do nothing until we have known last state from SFP and motor drivers.
+            if not state.get('netmeasure') or not state.get('motors') or not remote_state.get('motors') or not remote_state.get('netmeasure'):
+                # Do nothing until we have known last state from network measurements and motor drivers.
                 print 'ERROR: No connection!'
 
             else:
-                # Get last known state for the first SFP module.
-                sfp = state['sfp']['sfp'].values()[0]
-                sfp_remote = remote_state['sfp']['sfp'].values()[0]
+                # Get last known network measurement state.
+                netmeasure = state.get('netmeasure', {})
+                netmeasure_remote = remote_state.get('netmeasure', {})
+                # Convert packet loss to link quality (0-100%)
+                packet_loss_self = netmeasure.get('packet_loss', 100.0)
+                packet_loss_remote = netmeasure_remote.get('packet_loss', 100.0)
+                link_quality_self = 100.0 - packet_loss_self
+                link_quality_remote = 100.0 - packet_loss_remote
+
                 # Get last known motor driver state.
                 motor = state['motors']['motor']
                 motor_remote = remote_state['motors']['motor']
@@ -198,14 +209,14 @@ class Alignment(koruza.Application):
                 # Error loop - catch error when unit stops moving, resend request or change desired position
                 if not motor['next_x'] == self.wanted_x or not motor['next_y'] == self.wanted_y:
                     print 'ERROR: Next and wanted position doesnt match.'
-                    print 'READING: C: %d, RC: %d, X: %d, nX: %d, wX: %d, Y: %d, nY: %d, wY: %d, SFP: %f' % (self.case, self.remote_case, motor['current_x'], motor['next_x'], self.wanted_x, motor['current_y'], motor['next_y'], self.wanted_y, self.sfp_reading)
+                    print 'READING: C: %d, RC: %d, X: %d, nX: %d, wX: %d, Y: %d, nY: %d, wY: %d, LinkQuality: %.1f%%' % (self.case, self.remote_case, motor['current_x'], motor['next_x'], self.wanted_x, motor['current_y'], motor['next_y'], self.wanted_y, self.link_quality)
                     bus.command('motor_move', next_x = self.wanted_x, next_y = self.wanted_y)
 
                 if time.time() - self.print_time > 10:
                     self.print_time = time.time()
                     if not motor['current_x'] == self.wanted_x or not motor['current_y'] == self.wanted_y:
                         print 'ERROR: Current and wanted position doesnt match.'
-                        print 'READING: C: %d, RC: %d, X: %d, nX: %d, wX: %d, Y: %d, nY: %d, wY: %d, SFP: %f' % (self.case, self.remote_case, motor['current_x'], motor['next_x'], self.wanted_x, motor['current_y'], motor['next_y'], self.wanted_y, self.sfp_reading)
+                        print 'READING: C: %d, RC: %d, X: %d, nX: %d, wX: %d, Y: %d, nY: %d, wY: %d, LinkQuality: %.1f%%' % (self.case, self.remote_case, motor['current_x'], motor['next_x'], self.wanted_x, motor['current_y'], motor['next_y'], self.wanted_y, self.link_quality)
                         self.wanted_x =  motor['current_x']
                         self.wanted_y = motor['current_y']
 
@@ -232,19 +243,20 @@ class Alignment(koruza.Application):
                     else:
                         self.rec_counter = 0
 
-                    # UPDATE SFP READING
-                    self.sfp_reading = self.k1*sfp['rx_power_db'] + self.k2*sfp_remote['rx_power_db']
-                    self.sfp_reading_self = sfp['rx_power_db']
-                    self.sfp_reading_remote = sfp_remote['rx_power_db']
-                    # Re-calculate step size based on power value
-                    self.step_distance = 5 -(self.sfp_reading/30)*3
+                    # UPDATE LINK QUALITY (from network measurements)
+                    self.link_quality = self.k1*link_quality_self + self.k2*link_quality_remote
+                    self.link_quality_self = link_quality_self
+                    self.link_quality_remote = link_quality_remote
+                    # Re-calculate step size based on link quality (0-100%)
+                    # Higher quality = smaller steps (more precise)
+                    self.step_distance = 5 - (self.link_quality/100.0)*3  # 2-5mm range
                     self.step = self.step_distance/self.step_single  # calculate number of steps in single move
                     self.step = int(round(self.step))
 
                     self.k = self.k + 1 # Update loop counter
 
                     if self.moving == 1 or time.time() - self.print_time > 1:
-                        print 'READING: C: %d, RC: %d, X: %d, nX: %d, wX: %d, Y: %d, nY: %d, wY: %d, SFP: %f' % (self.case, self.remote_case, motor['current_x'], motor['next_x'], self.wanted_x, motor['current_y'], motor['next_y'], self.wanted_y, self.sfp_reading)
+                        print 'READING: C: %d, RC: %d, X: %d, nX: %d, wX: %d, Y: %d, nY: %d, wY: %d, LinkQuality: %.1f%%' % (self.case, self.remote_case, motor['current_x'], motor['next_x'], self.wanted_x, motor['current_y'], motor['next_y'], self.wanted_y, self.link_quality)
                         self.print_time = time.time() #Reset printing time
 
                     # Check if running time exceeded max time - go to hibernation state
@@ -272,7 +284,7 @@ class Alignment(koruza.Application):
                         # initialise current position to best position
                         self.best_x = motor['current_x']
                         self.best_y = motor['current_y']
-                        self.best_rx = self.sfp_reading
+                        self.best_rx = self.link_quality
                         self.start_x = motor['current_x']
                         self.start_y = motor['current_y']
 
@@ -282,7 +294,7 @@ class Alignment(koruza.Application):
                         self.j = 0
                         self.a = 0
 
-                        if self.sfp_reading < self.min_threshold:
+                        if self.link_quality < self.min_threshold:
                             # If no signal is received go to spiral scan
                             self.old_case = 10
 
@@ -312,7 +324,7 @@ class Alignment(koruza.Application):
                                 self.wait_time = time.time() # Reset waiting time
 
                             # If next state is not known, reevaluate current signal and move
-                            elif self.sfp_reading < self.max_threshold or self.sfp_reading_self < self.max_threshold_self or self.sfp_reading_remote < self.max_threshold_remote:
+                            elif self.link_quality < self.max_threshold or self.link_quality_self < self.max_threshold_self or self.link_quality_remote < self.max_threshold_remote:
                                 self.old_case = 20 # Go to line scan
                                 # Send request counter k
                                 self.publish({'req_counter': self.k})
@@ -372,8 +384,8 @@ class Alignment(koruza.Application):
                         self.a = 0
                         self.best_x = motor['current_x']
                         self.best_y = motor['current_y']
-                        self.best_rx = self.sfp_reading # Starting sfp for freference
-                        self.sfp_avg = self.sfp_reading # reset average reading
+                        self.best_rx = self.link_quality # Starting sfp for freference
+                        self.sfp_avg = self.link_quality # reset average reading
                         self.wait_time = time.time() # Reset waiting time
                         self.start_time = time.time() # Reset starting time
                         self.case = 5
@@ -393,7 +405,7 @@ class Alignment(koruza.Application):
                         # Every 0.5 second take reading
                         if time.time() - self.wait_time > 0.5:
                             self.wait_time = time.time() # Reset waiting time
-                            self.sfp_avg = self.sfp_avg + self.sfp_reading # Update average value
+                            self.sfp_avg = self.sfp_avg + self.link_quality # Update average value
                             self.i += 1 # increase counter
                         # Every minute re-calculate average
                         if self.i == 100:
@@ -412,7 +424,7 @@ class Alignment(koruza.Application):
                         # If enough time has passed from hibernation, and KORUZA doesn't have sufiicient power, try again
                         if time.time()-self.start_time > self.max_time and self.sfp_avg < self.max_threshold:
                             self.i = 0 # Reset counter
-                            self.sfp_avg = self.sfp_reading
+                            self.sfp_avg = self.link_quality
                             self.case = 1
                             self.old_case = 20
                             self.max_time = 1800 # Set timeout to 30 min
@@ -425,7 +437,7 @@ class Alignment(koruza.Application):
 
                         self.best_x = motor['current_x']
                         self.best_y = motor['current_y']
-                        self.best_rx = self.sfp_reading
+                        self.best_rx = self.link_quality
 
                         # Move to starting position
                         self.wanted_x = self.start_x
@@ -472,10 +484,10 @@ class Alignment(koruza.Application):
 
 
                         # Check if better position was achieved - update values
-                        if self.sfp_reading > self.best_rx:
+                        if self.link_quality > self.best_rx:
                             self.best_x = motor['current_x']
                             self.best_y = motor['current_y']
-                            self.best_rx = self.sfp_reading
+                            self.best_rx = self.link_quality
 
                         # Check if line is finished
                         if self.j == self.n_points:
@@ -510,7 +522,7 @@ class Alignment(koruza.Application):
 
                         # Check if some signal was detected and terminate the movement
                         # Combined reading - go to line scan:
-                        if self.sfp_reading > self.min_threshold:
+                        if self.link_quality > self.min_threshold:
                             # Go to line scan
                             self.old_case = 20
                             # Go to waiting state
@@ -530,13 +542,13 @@ class Alignment(koruza.Application):
                         self.moving = 1
                         # If starting new line make starting point best position
                         # Check if better position was achieved - update values
-                        if self.sfp_reading > self.best_rx or self.j == 0:
+                        if self.link_quality > self.best_rx or self.j == 0:
                             self.best_x = motor['current_x']
                             self.best_y = motor['current_y']
-                            self.best_rx = self.sfp_reading
+                            self.best_rx = self.link_quality
 
                         # Check if enough signal was found
-                        if self.sfp_reading > self.max_threshold and self.sfp_reading_self > self.max_threshold_self and self.sfp_reading_remote > self.max_threshold_remote:
+                        if self.link_quality > self.max_threshold and self.link_quality_self > self.max_threshold_self and self.link_quality_remote > self.max_threshold_remote:
                             print "Done!"
                             # Stay at the current point
                             self.wanted_x = motor['current_x']
@@ -574,7 +586,7 @@ class Alignment(koruza.Application):
                                 self.angle = 0
 
                             # If best position is at the end of the line
-                            elif self.sfp_reading >= self.best_rx:
+                            elif self.link_quality >= self.best_rx:
                                 # Reset line counter and continue in same direction
                                 self.i = 0
                                 self.l_points = 5 # reset number of points in a line
@@ -655,10 +667,10 @@ class Alignment(koruza.Application):
                         self.j = self.j + 1 # Increase point count
 
                         # Check if better position was achieved - update values
-                        if self.sfp_reading > self.best_rx:
+                        if self.link_quality > self.best_rx:
                             self.best_x = motor['current_x']
                             self.best_y = motor['current_y']
-                            self.best_rx = self.sfp_reading
+                            self.best_rx = self.link_quality
 
                         # Check if line is finished
                         if self.j == self.l_points*2:

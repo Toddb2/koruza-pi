@@ -22,7 +22,7 @@ class SpiralScan(koruza.Application):
     j = 0
     # variables updated from GUI
     step = 100 # Step for scanning, can be updated from GUI when in idle state
-    threshold = 10 # Threshold for auto stop, can be updated from GUI anytime
+    threshold = 50 # Threshold for auto stop (link quality 0-100%), can be updated from GUI anytime
 
     def on_command(self, bus, command, state, remote_state):
         if command['command'] == 'start' and self.state == 'idle':
@@ -37,7 +37,7 @@ class SpiralScan(koruza.Application):
 
             # Get variables from the command that was sent on the bus.
             self.step = command.get('step', 100)
-            self.threshold = command.get('threshold', 10)
+            self.threshold = command.get('threshold', 50)  # 50% link quality threshold
 
             print 'got start command step=%d threshold=%d' % (self.step, self.threshold)
         elif command['command'] == 'stop' and self.state == 'go':
@@ -46,11 +46,14 @@ class SpiralScan(koruza.Application):
 
     def on_idle(self, bus, state, remote_state):
         if self.state == 'go':
-            if not state.get('sfp') or not state.get('motors'):
-                # Do nothing until we have known last state from SFP and motor drivers.
+            if not state.get('netmeasure') or not state.get('motors'):
+                # Do nothing until we have known last state from network measurements and motor drivers.
                 return
-            # Get last known state for the first SFP module.
-            sfp = state['sfp']['sfp'].values()[0]
+            # Get last known network measurement state.
+            netmeasure = state.get('netmeasure', {})
+            packet_loss = netmeasure.get('packet_loss', 100.0)
+            # Convert packet loss to link quality (0-100%)
+            link_quality = 100.0 - packet_loss
             # Get last known motor driver state.
             motor = state['motors']['motor']
 
@@ -77,9 +80,10 @@ class SpiralScan(koruza.Application):
                     self.n_points = self.n_points + 1 # Increase nr. of points per line
 
                 # Check if some signal was detected and terminate the movement
-                if sfp['rx_power_mw'] > self.threshold:
+                # Link quality > threshold means good enough alignment
+                if link_quality > self.threshold:
                     self.state = 'idle'
-                    print 'found optical power'
+                    print 'found good link quality: %.1f%%' % link_quality
 
         elif self.state == 'idle':
             pass

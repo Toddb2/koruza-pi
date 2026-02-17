@@ -15,6 +15,13 @@ import socket
 import fcntl
 import requests
 import httplib
+import sys
+
+# Add koruza package to path
+sys.path.insert(0, '/koruza')
+
+# Import GPIO stepper motor driver
+from drivers.gpio_stepper import GPIOStepperMotor
 
 
 def schema_hostname(value):
@@ -159,10 +166,13 @@ class IPC(object):
                     if not found_argument:
                         return self.reply_error(IPC.ERROR_BAD_REQUEST, "Missing arguments.")
 
+                    # Read current position for any unspecified axes
+                    current_status = self._controller.motor.read()
+
                     self._controller.motor.move(
-                        next_x=data.get('next_x'),
-                        next_y=data.get('next_y'),
-                        next_f=data.get('next_f'),
+                        x=data.get('next_x', current_status['current_x']),
+                        y=data.get('next_y', current_status['current_y']),
+                        f=data.get('next_f', current_status['current_f']),
                     )
                     return self.reply_ok({'status': 'ok'})
                 except ValueError:
@@ -184,8 +194,9 @@ class IPC(object):
                     if not found_argument:
                         return self.reply_error(IPC.ERROR_BAD_REQUEST, "Missing arguments.")
 
+                    # GPIO motor driver doesn't support command parameter
+                    # Only configure laser, speed, and accel
                     self._controller.motor.configure(
-                        command=data.get('motor_command'),
                         laser=data.get('laser'),
                         speed=data.get('speed'),
                         accel=data.get('accel'),
@@ -697,22 +708,40 @@ class Controller(object):
         Initializes the motor driver.
         """
 
+        # Use GPIO stepper motor driver instead of I2C
         try:
-            self.motor = Motor(self, self.get_bus(1))
-        except DeviceNotFound:
+            # GPIO pin assignments for three motors
+            pins_x = (5, 6, 23, 24)    # X-axis motor (IN1, IN2, IN3, IN4)
+            pins_y = (25, 8, 7, 18)    # Y-axis motor
+            pins_f = (10, 9, 11, 26)   # F-axis motor
+
+            self.motor = GPIOStepperMotor(
+                pins_x=pins_x,
+                pins_y=pins_y,
+                pins_f=pins_f,
+                max_x=self.config.get('motor_max_x', 35000),
+                max_y=self.config.get('motor_max_y', 35000),
+                max_f=self.config.get('motor_max_f', 20000),
+                steps_per_unit=self.config.get('motor_steps_per_unit', 1.0),
+                step_delay=1.0 / (self.config.get('motor_speed_default', 1000) *
+                                  self.config.get('motor_steps_per_unit', 1.0))
+            )
+        except Exception as e:
+            print("Failed to initialize GPIO motor: %s" % str(e))
+            traceback.print_exc()
             self.motor = None
 
     def initialize_sfp(self):
         """
         Initializes the SFP drivers.
+        NOTE: SFP I2C access disabled - using network measurements instead.
         """
 
         self.sfp = []
-        # TODO: We currently only support a single SFP.
-        try:
-            self.sfp.append(SFP(self, self.get_bus(1)))
-        except DeviceNotFound:
-            pass
+        # SFP I2C driver disabled for GPIO-only setup
+        # Using TP-Link MC220L media converter (Ethernet interface)
+        # Link quality measured via network packet loss instead
+        pass
 
     def initialize_1wire(self):
         """
@@ -945,8 +974,9 @@ class Controller(object):
             # Attempt to reinitialize device drivers when not present.
             if not self.motor:
                 self.initialize_motor()
-            if not self.sfp:
-                self.initialize_sfp()
+            # SFP disabled for GPIO-only setup (using network measurements instead)
+            # if not self.sfp:
+            #     self.initialize_sfp()
 
             # Read data from device drivers.
             if now - last_read > 0.050:
