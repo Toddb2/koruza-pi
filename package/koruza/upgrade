@@ -8,12 +8,16 @@ fi
 UPGRADE_PACKAGE="$1"
 UPGRADE_DIR=/tmp/upgrade-koruza-repo
 if [ -z "${UPGRADE_PACKAGE}" ]; then
-  echo "No upgrade package specified, upgrading to latest master."
-  rm -rf "${UPGRADE_DIR}"
-  git clone https://github.com/IRNAS/koruza-pi "${UPGRADE_DIR}"
-  cd "${UPGRADE_DIR}"
-  ./make-package.sh
-  UPGRADE_PACKAGE="${UPGRADE_DIR}/koruza-package.tar.bz2"
+  # WARNING: The default clone URL below points to the upstream IRNAS repository.
+  # Running this without a package argument will OVERWRITE all local modifications
+  # (gpio_stepper.py, koruza-sensors ping-based measurements, alignment fixes, etc.)
+  # with the unmodified original KORUZA code.
+  # Pass a local package path as $1, or update the URL to your own fork first:
+  #   sudo /koruza/upgrade /path/to/koruza-package.tar.bz2
+  echo "ERROR: No upgrade package specified."
+  echo "Pass the path to a locally-built package: sudo /koruza/upgrade /path/to/koruza-package.tar.bz2"
+  echo "To build a package from this repo: ./make-package.sh"
+  exit 1
 fi
 
 # Do not shutdown the vpn service as otherwise we may lose connectivity.

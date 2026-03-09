@@ -1,4 +1,7 @@
 #!/bin/bash
-
-exec /koruza/bin/koruza-gpio 2>&1
-
+# koruza-gpio is the legacy single-motor GPIO stub.
+# It is DISABLED because koruza-sensors now drives all three motors
+# directly via gpio_stepper.py.  Running both would cause a GPIO 17
+# conflict (koruza-gpio claims BCM 17; gpio_stepper uses it for F-axis IN1).
+# Sleeping here prevents runit from rapid-restart-looping an empty process.
+exec sleep 86400

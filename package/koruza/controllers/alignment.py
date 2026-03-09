@@ -260,7 +260,7 @@ class Alignment(koruza.Application):
                         self.print_time = time.time() #Reset printing time
 
                     # Check if running time exceeded max time - go to hibernation state
-                    if self.start_time - time.time() > self.max_time:
+                    if time.time() - self.start_time > self.max_time:
                         # Go trough waiting state 100
                         self.case = 100
                         self.old_case = 4

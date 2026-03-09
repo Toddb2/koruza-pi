@@ -16,7 +16,9 @@ with open('/boot/config.txt', 'r+') as boot_cfg:
 
     append_config(boot_cfg, 'dtparam=i2c_arm=on', existing_configuration)
     append_config(boot_cfg, 'dtparam=spi=on', existing_configuration)
-    append_config(boot_cfg, 'dtoverlay=w1-gpio,gpiopin=26', existing_configuration)
+    # GPIO 4 (physical pin 7) is the standard 1-Wire pin on Raspberry Pi.
+    # Previously set to gpiopin=26, which conflicts with X-axis motor IN4.
+    append_config(boot_cfg, 'dtoverlay=w1-gpio,gpiopin=4', existing_configuration)
 
 # Setup modules.
 print "Updating modules."
