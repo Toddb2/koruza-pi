@@ -1,4 +1,8 @@
 #!/bin/bash
 
+# Remove stale IPC socket files left over from a previous crash.
+# If these exist when the process starts it can't bind and runit loops.
+rm -f /tmp/koruza-publish.ipc /tmp/koruza-command.ipc
+
 exec /koruza/bin/koruza-sensors 2>&1
 

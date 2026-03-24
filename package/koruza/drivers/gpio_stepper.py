@@ -78,7 +78,9 @@ class GPIOStepperMotor(object):
         }
         self.max_positions = {'x': max_x, 'y': max_y, 'f': max_f}
         self.steps_per_unit = steps_per_unit
-        self.step_delay = step_delay
+        # 28BYJ-48 reliable maximum is ~500 steps/sec (2 ms/step) under load.
+        # Enforce a hard floor so the motor never skips steps silently.
+        self.step_delay = max(0.002, step_delay)
 
         # Positions in KORUZA units (in-memory only, reset to 0 on restart)
         self.current_position = {'x': 0, 'y': 0, 'f': 0}
@@ -309,9 +311,10 @@ class GPIOStepperMotor(object):
 
         if speed is not None:
             self.speed = int(speed)
-            # Recalculate step delay so actual motor speed matches requested speed
+            # Recalculate step delay, but never go faster than 500 steps/sec
+            # (2 ms floor) — the 28BYJ-48 skips steps silently above this under load.
             if self.speed > 0 and self.steps_per_unit > 0:
-                self.step_delay = 1.0 / (self.speed * self.steps_per_unit)
+                self.step_delay = max(0.002, 1.0 / (self.speed * self.steps_per_unit))
             logger.info("configure: speed=%d step_delay=%.4fs", self.speed, self.step_delay)
 
         if accel is not None:

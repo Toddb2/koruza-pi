@@ -5,8 +5,26 @@ def append_config(cfg, line, existing):
     if line not in existing:
         cfg.write('%s\n' % line)
 
+
+def remove_lines_matching(path, substring):
+    """Remove any lines from a file that contain 'substring' (case-sensitive)."""
+    with open(path, 'r') as f:
+        lines = f.readlines()
+    kept = [l for l in lines if substring not in l]
+    if len(kept) != len(lines):
+        with open(path, 'w') as f:
+            f.writelines(kept)
+        print "Removed %d line(s) containing '%s' from %s" % (
+            len(lines) - len(kept), substring, path)
+
+
 # Setup boot configuration.
 print "Updating boot configuration."
+
+# Remove any previous 1-Wire overlay lines — the old default was gpiopin=26,
+# which conflicts with X-axis motor IN4 (BCM 26).  We replace with gpiopin=4.
+remove_lines_matching('/boot/config.txt', 'dtoverlay=w1-gpio')
+
 with open('/boot/config.txt', 'r+') as boot_cfg:
     existing_configuration = [
         line
